@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  lint-and-validate:
-    name: Lint & Validate
+  build-and-deploy:
+    name: Build & Deploy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -27,12 +27,30 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-  deploy:
-    name: Deploy to AWS EC2
-    needs: lint-and-validate
-    runs-on: ubuntu-latest
-    steps:
-      - name: SSH into EC2 and Deploy
+      # Build Next.js on GitHub runner (16GB RAM) to avoid OOM crashes on EC2
+      - name: Build Next.js application
+        run: npm run build
+
+      # Bundle standalone artifacts into a lightweight package (~18MB)
+      - name: Prepare standalone deployment package
+        run: |
+          cp -r public .next/standalone/public
+          cp -r .next/static .next/standalone/.next/static
+          cp Dockerfile.standalone .next/standalone/Dockerfile
+          cd .next/standalone && tar -czf ../../app.tar.gz .
+
+      # Transfer pre-built package to EC2 (takes ~3 seconds)
+      - name: Transfer package to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "app.tar.gz"
+          target: "~/app"
+
+      # Execute fast Docker build and container restart on EC2 (takes ~5 seconds)
+      - name: Run container on EC2 via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
@@ -41,27 +59,21 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: OPENWEATHER_API_KEY
+          command_timeout: 10m
           script: |
             set -e
 
-            APP_DIR="$HOME/ec2-docker-cicd"
+            mkdir -p ~/app
+            cd ~/app
 
-            echo ">>> Navigating to repository..."
-            if [ ! -d "$APP_DIR" ]; then
-              echo ">>> Cloning repository..."
-              git clone https://github.com/kavishannip/ec2-docker-cicd.git "$APP_DIR"
-            fi
-
-            cd "$APP_DIR"
-
-            echo ">>> Fetching latest code..."
-            git fetch origin main
-            git reset --hard origin/main
+            echo ">>> Extracting pre-built application..."
+            tar -xzf app.tar.gz
+            rm -f app.tar.gz
 
             echo ">>> Writing environment configuration..."
             echo "OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}" > .env
 
-            echo ">>> Building Docker image..."
+            echo ">>> Building lightweight Docker image..."
             docker build -t ec2-cicd-weather .
 
             echo ">>> Stopping previous container..."
@@ -76,10 +88,10 @@ jobs:
               --restart unless-stopped \
               ec2-cicd-weather
 
-            echo ">>> Cleaning up old unused images..."
+            echo ">>> Cleaning up dangling images..."
             docker image prune -f
 
-            echo ">>> Checking container status..."
+            echo ">>> Verifying container status..."
             docker ps --filter "name=weather-app"
 
             echo ">>> Deployment completed successfully!"

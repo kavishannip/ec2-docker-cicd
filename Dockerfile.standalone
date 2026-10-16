@@ -1,0 +1,19 @@
+FROM node:20-alpine
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Create unprivileged user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Copy all standalone files (server.js, node_modules, .next, public)
+COPY --chown=nextjs:nodejs . .
+
+USER nextjs
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
