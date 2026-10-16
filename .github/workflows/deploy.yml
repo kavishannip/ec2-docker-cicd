@@ -95,13 +95,25 @@ jobs:
             docker build -t ec2-cicd-weather .
 
             echo ">>> Stopping previous container..."
-            docker rm -f weather-app || true
+            docker rm -f weather-app 2>/dev/null || true
 
-            echo ">>> Starting new container on ports 80 and 3000..."
+            # Check if port 80 is occupied on the host (e.g. by Nginx, Apache, or another service)
+            PORT_FLAGS="-p 3000:3000"
+            if sudo ss -lptn 'sport = :80' 2>/dev/null | grep -q LISTEN || ss -tuln 2>/dev/null | grep -q ':80 '; then
+              echo ">>> Notice: Port 80 is already in use on this EC2 instance by:"
+              sudo ss -lptn 'sport = :80' 2>/dev/null || true
+              echo ">>> Deploying container on port 3000 (-p 3000:3000)..."
+              echo ">>> App will be accessible at: http://${HOSTNAME}:3000"
+            else
+              echo ">>> Port 80 is free. Exposing container on both port 80 and port 3000..."
+              PORT_FLAGS="-p 80:3000 -p 3000:3000"
+              echo ">>> App will be accessible at: http://${HOSTNAME} (and :3000)"
+            fi
+
+            echo ">>> Starting new container ($PORT_FLAGS)..."
             docker run -d \
               --name weather-app \
-              -p 80:3000 \
-              -p 3000:3000 \
+              $PORT_FLAGS \
               --env-file .env \
               --restart unless-stopped \
               ec2-cicd-weather
@@ -111,6 +123,10 @@ jobs:
 
             echo ">>> Verifying running container status..."
             docker ps --filter "name=weather-app"
+
+            echo ">>> Testing local health check..."
+            sleep 3
+            curl -s -o /dev/null -w ">>> HTTP Status: %{http_code}\n" http://127.0.0.1:3000/ || true
 
             echo ">>> Deployment successfully finished!"
           EOF
