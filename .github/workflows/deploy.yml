@@ -61,7 +61,18 @@ jobs:
           echo "=================================================="
           echo ">>> 1. Testing SSH connectivity to $EC2_USER@$EC2_HOST..."
           echo "=================================================="
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=yes "$EC2_USER@$EC2_HOST" "echo 'SSH connection verified!'"
+          if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=yes "$EC2_USER@$EC2_HOST" "echo 'SSH connection verified!'"; then
+            echo "::error::SSH connection to $EC2_USER@$EC2_HOST timed out or failed!"
+            echo ""
+            echo "================================================================"
+            echo ">>> ACTION REQUIRED IN AWS MANAGEMENT CONSOLE:"
+            echo "1. Reboot the EC2 instance (it froze during the previous OOM crash)."
+            echo "2. Verify Public IPv4: If you stopped and restarted the EC2 instance,"
+            echo "   AWS assigned a NEW Public IP. Update EC2_HOST in GitHub Secrets."
+            echo "3. Ensure EC2 Security Group allows Inbound Port 22 (SSH) from 0.0.0.0/0."
+            echo "================================================================"
+            exit 1
+          fi
 
           echo "=================================================="
           echo ">>> 2. Transferring application bundle..."
