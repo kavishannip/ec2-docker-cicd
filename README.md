@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TimeSpot: Weather & World Clock App (AWS EC2 CI/CD)
 
-## Getting Started
+A responsive Next.js weather dashboard and world clock inspired by modern industrial UI design. Features real-time local and global time calculations, weather outlooks, dynamic day/night ambient calculations, metric/imperial toggles, and an automated zero-OOM CI/CD deployment pipeline to AWS EC2 using Docker.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Tech Stack
+
+* **Frontend:** Next.js 15 (App Router, Standalone), React 19, Tailwind CSS, Lucide React
+* **Weather API:** OpenWeather Current & 5-Day Forecast API
+* **Containerization:** Docker (`node:20-alpine` standalone runner, ~72MB image)
+* **CI/CD:** GitHub Actions (with fail-fast timeouts and artifact bundling)
+* **Hosting:** AWS EC2 (`t2.micro` / `t3.micro`)
+
+---
+
+## Getting Started Locally
+
+### 1. Prerequisites
+* Node.js 20+
+* OpenWeather API Key ([Get one free](https://openweathermap.org/api))
+
+### 2. Environment Setup
+Create a `.env` file in the project root:
+
+```env
+OPENWEATHER_API_KEY=your_openweather_api_key_here
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 3. Install & Run
+```bash
+npm install
+npm run dev
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## Running with Docker Locally
 
-To learn more about Next.js, take a look at the following resources:
+To build and run the container locally:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+# Build image
+docker build -t weather-app .
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# Run container
+docker run -d --name weather-app -p 3000:3000 --env-file .env --restart unless-stopped weather-app
+```
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Automated CI/CD Deployment to AWS EC2
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Every push to the `main` branch triggers an automated GitHub Actions workflow ([`.github/workflows/deploy.yml`](file:///.github/workflows/deploy.yml)):
+
+1. **Lint & Test:** Runs ESLint on GitHub Actions.
+2. **Compile in CI (16GB RAM):** Builds Next.js in standalone mode to prevent OOM memory freezes on small EC2 instances.
+3. **Artifact Bundling:** Packages only runtime assets (~18MB).
+4. **Deploy over SSH:** Transfers package to EC2, launches the container in Docker with health checks, and handles host port conflicts dynamically.
+
+### Required GitHub Repository Secrets
+
+Configure these in **GitHub Repository &rarr; Settings &rarr; Secrets and variables &rarr; Actions**:
+
+* `EC2_HOST`: Public IPv4 address or Elastic IP of your EC2 instance.
+* `EC2_USER`: SSH username (`ubuntu` or `ec2-user`).
+* `EC2_SSH_KEY`: Private RSA SSH key (`.pem` file content).
+* `OPENWEATHER_API_KEY`: Your OpenWeather API key.
+
+---
+
+## Deployment Documentation
+
+For the complete step-by-step production architecture, security group rules, swap configuration, and troubleshooting guide, see [**DEPLOYMENT_PIPELINE_GUIDE.md**](file:///DEPLOYMENT_PIPELINE_GUIDE.md).
