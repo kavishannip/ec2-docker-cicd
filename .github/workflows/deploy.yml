@@ -1,0 +1,85 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  lint-and-validate:
+    name: Lint & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+  deploy:
+    name: Deploy to AWS EC2
+    needs: lint-and-validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH into EC2 and Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: OPENWEATHER_API_KEY
+          script: |
+            set -e
+
+            APP_DIR="$HOME/ec2-docker-cicd"
+
+            echo ">>> Navigating to repository..."
+            if [ ! -d "$APP_DIR" ]; then
+              echo ">>> Cloning repository..."
+              git clone https://github.com/kavishannip/ec2-docker-cicd.git "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+
+            echo ">>> Fetching latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo ">>> Writing environment configuration..."
+            echo "OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}" > .env
+
+            echo ">>> Building Docker image..."
+            docker build -t ec2-cicd-weather .
+
+            echo ">>> Stopping previous container..."
+            docker rm -f weather-app || true
+
+            echo ">>> Starting new container..."
+            docker run -d \
+              --name weather-app \
+              -p 80:3000 \
+              -p 3000:3000 \
+              --env-file .env \
+              --restart unless-stopped \
+              ec2-cicd-weather
+
+            echo ">>> Cleaning up old unused images..."
+            docker image prune -f
+
+            echo ">>> Checking container status..."
+            docker ps --filter "name=weather-app"
+
+            echo ">>> Deployment completed successfully!"

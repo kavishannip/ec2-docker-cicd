@@ -1,0 +1,28 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies & Build artifacts
+node_modules
+.next
+out
+build
+
+# Environment files (inject at runtime via -e or --env-file)
+.env*.local
+
+# IDE & OS files
+.vscode
+.idea
+.DS_Store
+*.pem
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Docker files
+Dockerfile
+.dockerignore
