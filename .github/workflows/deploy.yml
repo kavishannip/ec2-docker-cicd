@@ -11,6 +11,7 @@ jobs:
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,59 +28,65 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      # Build Next.js on GitHub runner (16GB RAM) to avoid OOM crashes on EC2
+      # 1. Compile Next.js standalone on GitHub Runner (16GB RAM) to eliminate EC2 OOM crashes
       - name: Build Next.js application
         run: npm run build
 
-      # Bundle standalone artifacts into a lightweight package (~18MB)
+      # 2. Bundle standalone files + Dockerfile + environment config into a lightweight package (~18MB)
       - name: Prepare standalone deployment package
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
         run: |
           cp -r public .next/standalone/public
           cp -r .next/static .next/standalone/.next/static
           cp Dockerfile.standalone .next/standalone/Dockerfile
+          echo "OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}" > .next/standalone/.env
           cd .next/standalone && tar -czf ../../app.tar.gz .
 
-      # Transfer pre-built package to EC2 (takes ~3 seconds)
-      - name: Transfer package to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "app.tar.gz"
-          target: "~/app"
-
-      # Execute fast Docker build and container restart on EC2 (takes ~5 seconds)
-      - name: Run container on EC2 via SSH
-        uses: appleboy/ssh-action@v1.2.0
+      # 3. Deploy to EC2 via native SSH & SCP with strict connection timeouts
+      - name: Deploy to AWS EC2
         env:
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          envs: OPENWEATHER_API_KEY
-          command_timeout: 10m
-          script: |
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -e
+
+          # Setup SSH private key
+          mkdir -p ~/.ssh
+          echo "$EC2_KEY" > ~/.ssh/id_rsa
+          sed -i 's/\r$//' ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "=================================================="
+          echo ">>> 1. Testing SSH connectivity to $EC2_USER@$EC2_HOST..."
+          echo "=================================================="
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=yes "$EC2_USER@$EC2_HOST" "echo 'SSH connection verified!'"
+
+          echo "=================================================="
+          echo ">>> 2. Transferring application bundle..."
+          echo "=================================================="
+          ssh -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" "mkdir -p ~/app"
+          scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 app.tar.gz "$EC2_USER@$EC2_HOST":~/app/app.tar.gz
+
+          echo "=================================================="
+          echo ">>> 3. Building and launching Docker container..."
+          echo "=================================================="
+          ssh -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" "bash -s" << 'EOF'
             set -e
 
-            mkdir -p ~/app
             cd ~/app
-
             echo ">>> Extracting pre-built application..."
             tar -xzf app.tar.gz
             rm -f app.tar.gz
 
-            echo ">>> Writing environment configuration..."
-            echo "OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}" > .env
-
-            echo ">>> Building lightweight Docker image..."
+            echo ">>> Building standalone Docker container..."
             docker build -t ec2-cicd-weather .
 
             echo ">>> Stopping previous container..."
             docker rm -f weather-app || true
 
-            echo ">>> Starting new container..."
+            echo ">>> Starting new container on ports 80 and 3000..."
             docker run -d \
               --name weather-app \
               -p 80:3000 \
@@ -88,10 +95,11 @@ jobs:
               --restart unless-stopped \
               ec2-cicd-weather
 
-            echo ">>> Cleaning up dangling images..."
+            echo ">>> Pruning dangling images..."
             docker image prune -f
 
-            echo ">>> Verifying container status..."
+            echo ">>> Verifying running container status..."
             docker ps --filter "name=weather-app"
 
-            echo ">>> Deployment completed successfully!"
+            echo ">>> Deployment successfully finished!"
+          EOF
